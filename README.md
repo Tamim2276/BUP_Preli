@@ -5,9 +5,24 @@ scenario plus 1–3 natural-language operator notes, uses an **LLM to interpret 
 structured directives, validates them with **deterministic guardrails**, and computes the
 **minimum-cost 24-hour grid/solar/battery schedule** with a linear program.
 
+## Live deployment
+
+**Base URL:** https://bup-preli-jugu.onrender.com
+
+| Endpoint | Link |
+|---|---|
+| Health | https://bup-preli-jugu.onrender.com/health → `{"status":"ok"}` |
+| Main | `POST https://bup-preli-jugu.onrender.com/optimize-energy` |
+| Interactive docs | https://bup-preli-jugu.onrender.com/docs (prefilled example, "Try it out") |
+
+```bash
+curl https://bup-preli-jugu.onrender.com/health
+python tests/run_samples.py https://bup-preli-jugu.onrender.com     # 10 public samples -> ALL PASS
+```
+
 ## Architecture
 
-```
+```text
 request ─► schema check ─► LLM chain ─► guardrails ─► LP optimizer ─► final replay check ─► JSON
            (400/422)       (see below)   (validate,     (SciPy HiGHS,     (energy balance,
                                           windows→hours) min grid cost)    battery, directives)
@@ -16,7 +31,8 @@ request ─► schema check ─► LLM chain ─► guardrails ─► LP optimiz
 - **LLM role:** interprets every operator note into exactly one of the 6 supported directive types
   (`solar_reduction`, `minimum_battery_reserve`, `no_charge_window`, `no_discharge_window`,
   `max_grid_window`, `no_op`). All notes of a request go in **one** call. The LLM returns time windows
-  (`[[start, end]]`, end exclusive); code converts them to hours. The LLM never does scheduling or math.
+  (`[[start, end]]`, end exclusive); deterministic code converts them to hours. The LLM never does
+  scheduling or math.
 - **LLM provider chain** (all free tiers, OpenAI-compatible endpoints via the `openai` Python SDK):
   1. Google Gemini `gemini-3.5-flash-lite` (primary)
   2. Mistral `ministral-14b-latest`
@@ -54,7 +70,8 @@ Errors: **400** malformed JSON / structurally invalid request, **422** semantica
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in the keys (never commit `.env`). Providers without a key are skipped.
+Copy `.env.example` to `.env` and fill in the keys (never commit `.env`). Providers without a key are
+skipped, so the service runs with any subset of keys (even none: the rule-based parser answers).
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -68,9 +85,11 @@ Copy `.env.example` to `.env` and fill in the keys (never commit `.env`). Provid
 | `GROQ_API_KEY` | — | console.groq.com key (free) |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | fourth provider |
 | `LLM_TIMEOUT_S` | `8` | per-call LLM timeout (s) |
-| `PORT` | `8000` | HTTP port |
+| `PORT` | `8000` | HTTP port (hosting platforms usually set this) |
 
 ## Local quickstart
+
+Requires Python 3.10+ (tested with 3.10 locally and 3.11 on Render).
 
 ```bash
 git clone https://github.com/Tamim2276/BUP_Preli.git
@@ -92,6 +111,8 @@ curl -X POST http://127.0.0.1:8000/optimize-energy \
   -H "Content-Type: application/json" \
   -d "$(python -c "import json;print(json.dumps(json.load(open('tests/public_samples.json'))['cases'][5]['input']))")"
 ```
+
+On Windows, use `127.0.0.1` rather than `localhost` (Windows tries IPv6 first and adds ~2 s per request).
 
 Trimmed response:
 
@@ -117,64 +138,106 @@ Trimmed response:
 
 ## Public-sample test
 
-With the server running:
+With a server running:
 
 ```bash
-python tests/run_samples.py                                   # local server
-python tests/run_samples.py https://<your-deployment-url>     # deployed server
+python tests/run_samples.py                                        # local server (127.0.0.1:8000)
+python tests/run_samples.py https://bup-preli-jugu.onrender.com    # live deployment
 ```
 
-Expected result (verified):
+Expected result:
 
-```
+```text
 schema 10/10 | interpretation 10/10 | valid 10/10 | optimal 10/10
-latency: median ~1.1s | p95 ~2.8s
 ALL PASS
 ```
 
-Reference costs matched exactly: SAMPLE-01 38365, 02 42885, 03 35480, 04 40495, 05 33950,
-06 34090, 07 38550, 08 37665, 09 34873, 10 41620.
+Each response is checked the way the judge does: exact response schema, interpretation vs the
+official answers, plan replayed against the **official** directives (energy balance, battery,
+directives, end-of-day neutrality), and total cost vs the reference. Reference costs matched exactly:
+SAMPLE-01 38365, 02 42885, 03 35480, 04 40495, 05 33950, 06 34090, 07 38550, 08 37665, 09 34873, 10 41620.
 
-Other tests (from the repo root):
+## Verified results
+
+| Test | Result |
+|---|---|
+| 10 public samples, live deployment (uncached) | 10/10 on every check, median 1.23 s, p95 1.54 s |
+| 10 public samples, fresh clone + fresh venv, no `.env` file (keys as env vars) | 10/10, p95 1.94 s |
+| 12 malformed / invalid requests, live deployment | all correct 400/422, server stays healthy |
+| 20 concurrent requests (above Gemini's 15/min free limit) | 20/20 correct and valid, p95 3.9 s, 0 rule-parser fallbacks |
+| Offline suites (validation, optimizer, guardrails, chain, API) | 115/115 checks pass |
+
+LLM accuracy (after guardrails) on the 18 public sample notes + 9 reworded notes, and on 31 extra
+reworded notes (`tests/paraphrases.json`):
+
+| Provider / model | 27 sample-based notes | 31 reworded notes |
+|---|---|---|
+| Gemini `gemini-3.5-flash-lite` | 27/27 | 31/31 |
+| Mistral `ministral-14b-latest` | 27/27 | 31/31 |
+| Mistral `ministral-8b-latest` | 24/27 (misses were a timeout / malformed reply) | 28/31 (one timed-out call) |
+| Groq `openai/gpt-oss-120b` | 27/27 | 31/31 |
+| Rule-based fallback parser (reference) | 18/18 sample notes | 22/31 |
+
+## All tests
+
+Run from the repo root (venv active):
 
 | Command | Checks | LLM calls |
 |---|---|---|
-| `python tests/test_schemas.py` | request validation, 400/422 | 0 |
-| `python tests/test_optimizer_offline.py` | optimizer + replay checker, 300 random scenarios | 0 |
-| `python tests/test_interpreter.py` | guardrails, provider chain with simulated failures, cache | 0 |
-| `python tests/test_api.py` | full API in-process, error codes | 0 |
-| `python tests/test_paraphrases.py [--provider=gemini\|mistral\|groq]` | 31 reworded notes | ~11 |
-| `python tests/test_robustness.py` | bad input, 20-request burst, invalid key | ~20 |
+| `python tests/test_schemas.py` | request validation, 400/422 (34 checks) | 0 |
+| `python tests/test_optimizer_offline.py` | optimizer + replay checker, 300 random scenarios (20 checks) | 0 |
+| `python tests/test_interpreter.py` | guardrails, windows, fallback parser, provider chain with simulated failures, cache (44 checks) | 0 |
+| `python tests/test_api.py` | full API in-process, error codes, 10 samples (17 checks) | 0 |
+| `python tests/run_samples.py [URL]` | 10 public samples against a running server | ≤10 |
+| `python tests/test_robustness.py [URL] [--no-burst]` | bad input, 20-request burst, invalid key | ~20 (0 with `--no-burst`) |
+| `python tests/test_paraphrases.py --provider=gemini\|mistral\|groq [--pace=13]` | 31 reworded notes | ~11 |
+| `python tests/test_llm.py --provider=...` | 27 notes per provider | ~13 |
 
-Measured accuracy on the 31 reworded notes: Gemini 31/31, ministral-14b 31/31, Groq gpt-oss-120b 31/31.
+## Deployment (Render)
 
-## Docker (fallback)
+Deployed on Render as a **Python 3** web service from this repository:
+
+| Setting | Value |
+|---|---|
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Root directory | *(empty — repo root)* |
+| Health check path | `/health` |
+| Environment | the variables above (keys as secrets) + `PYTHON_VERSION=3.11.9` |
+
+A free uptime monitor pings `/health` every 5 minutes so the free instance stays awake.
+
+## Docker
+
+The `Dockerfile` builds a self-contained image that listens on `0.0.0.0:8000` and contains
+**no secrets** (keys are passed at runtime; `.env` is excluded by `.dockerignore`).
 
 ```bash
-docker pull <dockerhub-user>/gridwise-llm:v1
-docker run --rm -p 8000:8000 \
-  -e GEMINI_API_KEY=... -e MISTRAL_API_KEY=... -e GROQ_API_KEY=... \
-  <dockerhub-user>/gridwise-llm:v1
+docker build -t gridwise-llm .
+docker run --rm -p 8000:8000 --env-file .env gridwise-llm
+#   or: docker run --rm -p 8000:8000 -e GEMINI_API_KEY=... -e MISTRAL_API_KEY=... -e GROQ_API_KEY=... gridwise-llm
 curl http://127.0.0.1:8000/health
 ```
 
-The image listens on `0.0.0.0:8000` (override with `-e PORT=...`) and contains **no secrets**;
-keys are passed at runtime. Built by GitHub Actions (`.github/workflows/docker.yml`).
+`.github/workflows/docker.yml` can publish the image to Docker Hub as `<user>/gridwise-llm:v1`
+once the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are set.
 
 ## Dependencies and credits
 
 FastAPI, Uvicorn, Pydantic, SciPy (HiGHS), NumPy, OpenAI Python SDK (used as the client for Gemini,
-Mistral and Groq OpenAI-compatible endpoints), python-dotenv, requests. LLMs: Google Gemini API,
-Mistral AI API, Groq API (free tiers). AI coding assistants were used during development.
+Mistral and Groq OpenAI-compatible endpoints), python-dotenv, requests — exact versions pinned in
+`requirements.txt`. LLMs: Google Gemini API, Mistral AI API, Groq API (free tiers). AI coding
+assistants were used during development.
 
 ## Known limitations
 
-- Free-tier rate limits: Gemini ≈15 req/min, ministral-14b 30/min, ministral-8b 188/min, Groq ≈5/min
-  (token-limited). Bursts beyond all of them fall back to the rule-based parser (less accurate on
-  unusual wording).
-- LLM latency depends on the providers (typically 1–3 s).
+- Free-tier rate limits: Gemini ≈15 req/min (the two Gemini models appear to share it),
+  ministral-14b 30/min, ministral-8b 188/min, Groq ≈5/min (token-limited). Traffic beyond all of them
+  falls back to the rule-based parser, which is less accurate on unusual wording (22/31 vs 31/31).
+- LLM latency depends on the providers (typically 1–3 s per request).
 - Windows crossing midnight are expanded as start→23 plus 0→end.
-- The cache is in memory and resets on restart.
+- The interpretation cache is in memory and resets on restart.
+- The free Render instance sleeps after 15 minutes without traffic; the uptime monitor prevents this.
 
 ## Secret handling
 
