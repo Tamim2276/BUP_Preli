@@ -1,0 +1,7 @@
+.env
+.venv
+.git
+__pycache__
+tests
+Question
+GridWise_Build_Guide.md

@@ -3,7 +3,7 @@
   422 = well-formed but semantically impossible (battery state out of range)
 """
 import json
-from typing import Annotated
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -79,3 +79,41 @@ def parse_request(raw: bytes) -> dict:
     if not b["minimum_energy_kwh"] <= b["initial_energy_kwh"] <= b["capacity_kwh"]:
         raise RequestError(422, "battery initial_energy_kwh must be between minimum and capacity")
     return req
+
+
+DirectiveType = Literal["solar_reduction", "minimum_battery_reserve", "no_charge_window",
+                        "no_discharge_window", "max_grid_window", "no_op"]
+
+
+class DirectiveInterpretation(BaseModel):
+    note_index: int
+    applies: bool
+    directive_type: DirectiveType
+    structured_adjustment: Optional[dict] = Field(
+        description='{"hours":[...], "factor"} | {"hours":[...], "minimum_energy_kwh"} | {"hours":[...]} | '
+                    '{"hours":[...], "max_grid_kwh"} | null for no_op',
+        examples=[{"hours": [13, 14], "factor": 0.2}])
+    explanation: str
+
+
+class HourPlan(BaseModel):
+    hour: int
+    grid_kwh: float
+    solar_used_kwh: float
+    battery_action: Literal["charge", "discharge", "idle"]
+    battery_kwh: float
+    battery_energy_after_kwh: float
+
+
+class OptimizeResponse(BaseModel):
+    scenario_id: str
+    directive_interpretation: list[DirectiveInterpretation]
+    hourly_plan: list[HourPlan]
+    total_grid_kwh: float
+    total_cost_bdt: float
+    peak_grid_kwh: float
+    plan_summary: str
+
+
+class ErrorResponse(BaseModel):
+    error: str
