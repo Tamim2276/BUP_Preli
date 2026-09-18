@@ -207,20 +207,30 @@ Deployed on Render as a **Python 3** web service from this repository:
 
 A free uptime monitor pings `/health` every 5 minutes so the free instance stays awake.
 
-## Docker
+## Docker (fallback image)
 
-The `Dockerfile` builds a self-contained image that listens on `0.0.0.0:8000` and contains
-**no secrets** (keys are passed at runtime; `.env` is excluded by `.dockerignore`).
+**Image:** `tamim2276/gridwise-llm:v1` (public on Docker Hub). It listens on `0.0.0.0:8000` and
+contains **no secrets**; keys are passed at runtime (`.env` is excluded by `.dockerignore`).
 
 ```bash
-docker build -t gridwise-llm .
-docker run --rm -p 8000:8000 --env-file .env gridwise-llm
-#   or: docker run --rm -p 8000:8000 -e GEMINI_API_KEY=... -e MISTRAL_API_KEY=... -e GROQ_API_KEY=... gridwise-llm
+docker pull tamim2276/gridwise-llm:v1
+docker run --rm -p 8000:8000 tamim2276/gridwise-llm:v1
 curl http://127.0.0.1:8000/health
 ```
 
-`.github/workflows/docker.yml` can publish the image to Docker Hub as `<user>/gridwise-llm:v1`
-once the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are set.
+Without keys the service still starts and answers every request (the rule-based parser interprets
+the notes). For LLM mode pass the keys:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e GEMINI_API_KEY=... -e MISTRAL_API_KEY=... -e GROQ_API_KEY=... \
+  tamim2276/gridwise-llm:v1
+#   or: docker run --rm -p 8000:8000 --env-file .env tamim2276/gridwise-llm:v1
+```
+
+The image is built by GitHub Actions (`.github/workflows/docker.yml`): build → start the container
+**without keys** → check `/health` and one `POST /optimize-energy` (must return 200) → push.
+To build locally instead: `docker build -t gridwise-llm .`
 
 ## Dependencies and credits
 
