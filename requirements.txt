@@ -1,10 +1,10 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.6
-# OpenAI SDK is the client for BOTH Gemini and Groq (OpenAI-compatible endpoints)
-openai>=1.40
-scipy>=1.11
-numpy>=1.26
-python-dotenv>=1.0
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+pydantic==2.13.5
+# OpenAI SDK is the client for Gemini, Mistral and Groq (OpenAI-compatible endpoints)
+openai==3.15.0
+scipy==1.15.3
+numpy==2.2.6
+python-dotenv==1.2.3
 # used by tests/run_samples.py
-requests>=2.31
+requests==2.34.2
